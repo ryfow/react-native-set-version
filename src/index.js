@@ -5,6 +5,7 @@ import fs from 'fs';
 import g2js from 'gradle-to-js/lib/parser';
 import path from 'path';
 import plist from 'plist';
+import { DOMParser, XMLSerializer } from 'xmldom';
 
 import { versionStringToVersion, versionToVersionCode } from './versionUtils';
 
@@ -15,6 +16,7 @@ const paths = {
   buildGradle: './android/app/build.gradle',
   infoPlist: './ios/<APP_NAME>/Info.plist',
   packageJson: './package.json',
+  windowsManifest: './windows/<APP_NAME>/Package.appxmanifest',
 };
 
 function setPackageVersion(versionText) {
@@ -117,30 +119,156 @@ async function setAndroidApplicationVersion(versionText) {
 
     display('');
 
-    display(chalk.yellow(`Will set Android version to ${chalk.bold.underline(versionText)}`));
-    display(chalk.yellow(`Will set Android version code to ${chalk.bold.underline(versionCode)}`));
+    display(
+      chalk.yellow(
+        `Will set Android version to ${chalk.bold.underline(versionText)}`,
+      ),
+    );
+    display(
+      chalk.yellow(
+        `Will set Android version code to ${chalk.bold.underline(versionCode)}`,
+      ),
+    );
     try {
       const buildGradle = fs.readFileSync(paths.buildGradle, 'utf8');
-      const newBuildGradle = buildGradle.replace(/versionCode \d+/g, `versionCode ${versionCode}`)
+      const newBuildGradle = buildGradle
+        .replace(/versionCode \d+/g, `versionCode ${versionCode}`)
         .replace(/versionName "[^"]*"/g, `versionName "${versionText}"`);
 
       fs.writeFileSync(paths.buildGradle, newBuildGradle, 'utf8');
       display(chalk.green(`Version replaced in ${chalk.bold('build.gradle')}`));
     } catch (err) {
-      display(chalk.yellowBright(`${chalk.bold.underline('WARNING:')} Cannot find file with name ${path.resolve(paths.buildGradle)}. This file will be skipped`));
+      display(
+        chalk.yellowBright(
+          `${chalk.bold.underline(
+            'WARNING:',
+          )} Cannot find file with name ${path.resolve(
+            paths.buildGradle,
+          )}. This file will be skipped`,
+        ),
+      );
     }
 
     try {
       const androidManifest = fs.readFileSync(paths.androidManifest, 'utf8');
-      if (androidManifest.includes('android:versionCode') || androidManifest.includes('android:versionName')) {
-        const newAndroidManifest = androidManifest.replace(/android:versionCode="\d*"/g, `android:versionCode="${versionCode}"`)
-          .replace(/android:versionName="[^"]*"/g, `android:versionName="${versionText}"`);
+      if (
+        androidManifest.includes('android:versionCode')
+        || androidManifest.includes('android:versionName')
+      ) {
+        const newAndroidManifest = androidManifest
+          .replace(
+            /android:versionCode="\d*"/g,
+            `android:versionCode="${versionCode}"`,
+          )
+          .replace(
+            /android:versionName="[^"]*"/g,
+            `android:versionName="${versionText}"`,
+          );
 
         fs.writeFileSync(paths.androidManifest, newAndroidManifest, 'utf8');
-        display(chalk.green(`Version replaced in ${chalk.bold('AndroidManifest.xml')}`));
+        display(
+          chalk.green(
+            `Version replaced in ${chalk.bold('AndroidManifest.xml')}`,
+          ),
+        );
       }
     } catch (err) {
-      display(chalk.yellowBright(`${chalk.bold.underline('WARNING:')} Cannot find file with name ${path.resolve(paths.androidManifest)}. This file will be skipped`));
+      display(
+        chalk.yellowBright(
+          `${chalk.bold.underline(
+            'WARNING:',
+          )} Cannot find file with name ${path.resolve(
+            paths.androidManifest,
+          )}. This file will be skipped`,
+        ),
+      );
+    }
+  }
+}
+
+function getWindowsVersionInfo(versionText) {
+  let versionInfo = {
+    currentVersionCode: null,
+    currentVersion: null,
+    version: null,
+    versionCode: null,
+  };
+
+  try {
+    const manifest = DOMParser.parseFromString(
+      fs.readFileSync(paths.windowsManifest, 'utf8'),
+    );
+    const versionString = manifest.documentElement
+      .getElementsByTagName('Identity')[0]
+      .getAttribute('Version');
+
+    const currentVersion = versionStringToVersion(versionString);
+    const versionCodeParts = currentVersion.split('.');
+    const currentVersionCode = +versionCodeParts[versionCodeParts.length - 1];
+    const version = versionStringToVersion(
+      versionText,
+      currentVersion,
+      currentVersionCode,
+    );
+    versionInfo = {
+      currentVersionCode,
+      currentVersion,
+      version,
+      versionCode: version.build,
+    };
+  } catch (err) {
+    display(
+      chalk.yellowBright(
+        `${chalk.bold.underline(
+          'WARNING:',
+        )} Cannot find key Identity@Version in file ${path.resolve(
+          paths.windowsManifest,
+        )}. Windows version configuration will be skipped`,
+      ),
+    );
+  }
+  return versionInfo;
+}
+
+async function setWindowsApplicationVersion(versionText) {
+  const { version } = await getWindowsVersionInfo(versionText);
+  if (version) {
+    display('');
+    display(chalk.yellow('Windows version info:'));
+    display(version);
+
+    display('');
+
+    display(
+      chalk.yellow(
+        `Will set Windows version to ${chalk.bold.underline(versionText)}`,
+      ),
+    );
+    try {
+      const manifest = DOMParser.parseFromString(
+        fs.readFileSync(paths.windowsManifest, 'utf8'),
+      );
+      const identity = manifest.documentElement.getElementsByTagName(
+        'Identity',
+      )[0];
+      identity.setAttribute('version', versionText);
+
+      fs.writeFileSync(
+        paths.windowsManifest,
+        XMLSerializer.serializeToString(manifest.documentElement),
+        'utf8',
+      );
+      display(chalk.green(`Version replaced in ${chalk.bold('Info.plist')}`));
+    } catch (err) {
+      display(
+        chalk.yellowBright(
+          `${chalk.bold.underline(
+            'WARNING:',
+          )} Cannot find file with name ${path.resolve(
+            paths.infoPlist,
+          )}. This file will be skipped`,
+        ),
+      );
     }
   }
 }
@@ -152,6 +280,7 @@ const changeVersion = async () => {
   paths.infoPlist = paths.infoPlist.replace('<APP_NAME>', appName);
   await setAndroidApplicationVersion(versionText);
   await setIosApplicationVersion(versionText);
+  await setWindowsApplicationVersion(versionText);
 
   display('');
 };
