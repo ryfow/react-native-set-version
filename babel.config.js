@@ -6,6 +6,7 @@ const presets = [
         node: true,
       },
       useBuiltIns: 'usage',
+      corejs: '2.x',
     },
   ],
 ];
